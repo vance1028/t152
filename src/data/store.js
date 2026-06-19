@@ -47,7 +47,20 @@ function mapSession(r) {
   return {
     id: r.id, lotId: r.lot_id, spaceId: r.space_id, plateNo: r.plate_no,
     enterTime: r.enter_time, exitTime: r.exit_time, feeCents: r.fee_cents,
-    status: r.status, paid: !!r.paid, createdAt: r.created_at,
+    status: r.status, paid: !!r.paid, paymentChannel: r.payment_channel || 'NONE',
+    createdAt: r.created_at,
+  };
+}
+function mapReportTask(r) {
+  if (!r) return null;
+  return {
+    id: r.id, taskKey: r.task_key, taskType: r.task_type,
+    params: r.params_json ? (typeof r.params_json === 'string' ? JSON.parse(r.params_json) : r.params_json) : {},
+    status: r.status, totalCount: r.total_count, processedCount: r.processed_count,
+    errorMessage: r.error_message, fileName: r.file_name,
+    fileSizeBytes: r.file_size_bytes, filePath: r.file_path,
+    createdBy: r.created_by, createdAt: r.created_at,
+    startedAt: r.started_at, finishedAt: r.finished_at,
   };
 }
 
@@ -237,14 +250,14 @@ async function getSessionById(id) {
 }
 async function createSession(d) {
   const [r] = await getPool().query(
-    `INSERT INTO parking_sessions (lot_id, space_id, plate_no, enter_time, status)
-     VALUES (?, ?, ?, ?, ?)`,
-    [d.lotId, d.spaceId ?? null, d.plateNo, d.enterTime, d.status || 'PARKED'],
+    `INSERT INTO parking_sessions (lot_id, space_id, plate_no, enter_time, status, payment_channel)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [d.lotId, d.spaceId ?? null, d.plateNo, d.enterTime, d.status || 'PARKED', d.paymentChannel || 'NONE'],
   );
   return getSessionById(r.insertId);
 }
 async function updateSession(id, d) {
-  const map = { spaceId: 'space_id', exitTime: 'exit_time', feeCents: 'fee_cents', status: 'status' };
+  const map = { spaceId: 'space_id', exitTime: 'exit_time', feeCents: 'fee_cents', status: 'status', paymentChannel: 'payment_channel' };
   const sets = []; const params = [];
   for (const [k, col] of Object.entries(map)) {
     if (d[k] !== undefined) { sets.push(`${col} = ?`); params.push(d[k]); }
@@ -254,11 +267,56 @@ async function updateSession(id, d) {
   return getSessionById(id);
 }
 
+/* ----------------------------- 报表任务 ----------------------------- */
+
+async function getReportTaskById(id) {
+  const [rows] = await getPool().query('SELECT * FROM report_tasks WHERE id = ?', [id]);
+  return mapReportTask(rows[0]);
+}
+async function getReportTaskByKey(taskKey) {
+  const [rows] = await getPool().query('SELECT * FROM report_tasks WHERE task_key = ?', [taskKey]);
+  return mapReportTask(rows[0]);
+}
+async function listReportTasks({ status, taskType, limit = 100 } = {}) {
+  const where = []; const params = [];
+  if (status) { where.push('status = ?'); params.push(status); }
+  if (taskType) { where.push('task_type = ?'); params.push(taskType); }
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [rows] = await getPool().query(
+    `SELECT * FROM report_tasks ${clause} ORDER BY id DESC LIMIT ?`,
+    [...params, limit],
+  );
+  return rows.map(mapReportTask);
+}
+async function createReportTask({ taskKey, taskType, params, createdBy }) {
+  const paramsJson = JSON.stringify(params || {});
+  const [r] = await getPool().query(
+    `INSERT INTO report_tasks (task_key, task_type, params_json, created_by, status)
+     VALUES (?, ?, ?, ?, 'PENDING')`,
+    [taskKey, taskType, paramsJson, createdBy ?? null],
+  );
+  return getReportTaskById(r.insertId);
+}
+async function updateReportTask(id, d) {
+  const map = {
+    status: 'status', totalCount: 'total_count', processedCount: 'processed_count',
+    errorMessage: 'error_message', fileName: 'file_name', fileSizeBytes: 'file_size_bytes',
+    filePath: 'file_path', startedAt: 'started_at', finishedAt: 'finished_at',
+  };
+  const sets = []; const params = [];
+  for (const [k, col] of Object.entries(map)) {
+    if (d[k] !== undefined) { sets.push(`${col} = ?`); params.push(d[k]); }
+  }
+  if (sets.length) { params.push(id); await getPool().query(`UPDATE report_tasks SET ${sets.join(', ')} WHERE id = ?`, params); }
+  return getReportTaskById(id);
+}
+
 module.exports = {
-  mapUser, mapLot, mapSpace, mapVehicle, mapSession,
+  mapUser, mapLot, mapSpace, mapVehicle, mapSession, mapReportTask,
   getUserByUsername, getUserById, listUsers, createUser, updateUser, deleteUser, countUsers,
   listLots, getLotById, getLotByCode, createLot, updateLot, deleteLot,
   listSpaces, getSpaceById, getSpaceByCode, createSpace, updateSpace, deleteSpace,
   listVehicles, getVehicleById, getVehicleByPlate, createVehicle, updateVehicle, deleteVehicle,
   listSessions, getSessionById, createSession, updateSession,
+  getReportTaskById, getReportTaskByKey, listReportTasks, createReportTask, updateReportTask,
 };

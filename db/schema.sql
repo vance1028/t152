@@ -46,18 +46,44 @@ CREATE TABLE IF NOT EXISTS vehicles (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS parking_sessions (
-  id          INT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-  lot_id      INT UNSIGNED NOT NULL,
-  space_id    INT UNSIGNED NULL,
-  plate_no    VARCHAR(16) NOT NULL,
-  enter_time  DATETIME(3) NOT NULL,
-  exit_time   DATETIME(3) NULL,
-  fee_cents   INT NOT NULL DEFAULT 0,
-  status      VARCHAR(16) NOT NULL DEFAULT 'PARKED',
-  paid        TINYINT(1) NOT NULL DEFAULT 0,
-  created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  id               INT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  lot_id           INT UNSIGNED NOT NULL,
+  space_id         INT UNSIGNED NULL,
+  plate_no         VARCHAR(16) NOT NULL,
+  enter_time       DATETIME(3) NOT NULL,
+  exit_time        DATETIME(3) NULL,
+  fee_cents        INT NOT NULL DEFAULT 0,
+  status           VARCHAR(16) NOT NULL DEFAULT 'PARKED',
+  paid             TINYINT(1) NOT NULL DEFAULT 0,
+  payment_channel  VARCHAR(32) NOT NULL DEFAULT 'NONE',
+  created_at       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   CONSTRAINT fk_session_lot FOREIGN KEY (lot_id) REFERENCES parking_lots(id) ON DELETE CASCADE,
   CONSTRAINT fk_session_space FOREIGN KEY (space_id) REFERENCES parking_spaces(id) ON DELETE SET NULL,
   INDEX idx_session_status (status),
-  INDEX idx_session_plate (plate_no)
+  INDEX idx_session_plate (plate_no),
+  INDEX idx_session_lot_enter (lot_id, enter_time),
+  INDEX idx_session_lot_exit (lot_id, exit_time),
+  INDEX idx_session_exit_paid (exit_time, paid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 异步报表导出任务表
+CREATE TABLE IF NOT EXISTS report_tasks (
+  id              INT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  task_key        VARCHAR(64) NOT NULL UNIQUE,
+  task_type       VARCHAR(32) NOT NULL,
+  params_json     JSON NOT NULL,
+  status          VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  total_count     INT NOT NULL DEFAULT 0,
+  processed_count INT NOT NULL DEFAULT 0,
+  error_message   VARCHAR(512) NULL,
+  file_name       VARCHAR(255) NULL,
+  file_size_bytes BIGINT UNSIGNED NULL,
+  file_path       VARCHAR(512) NULL,
+  created_by      INT UNSIGNED NULL,
+  created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  started_at      DATETIME(3) NULL,
+  finished_at     DATETIME(3) NULL,
+  INDEX idx_task_status (status),
+  INDEX idx_task_type (task_type),
+  INDEX idx_task_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

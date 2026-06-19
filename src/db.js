@@ -33,6 +33,7 @@ function getPool() {
 /**
  * 确保表结构存在（读取 db/schema.sql 执行）。
  * 用一个开启 multipleStatements 的临时连接执行，执行完关闭。
+ * 然后用 ALTER TABLE 迁移已有表，补上新增列和索引（IF NOT EXISTS 不处理已有表）。
  */
 async function ensureSchema() {
   const schemaPath = path.join(__dirname, '..', 'db', 'schema.sql');
@@ -40,9 +41,55 @@ async function ensureSchema() {
   const conn = await mysql.createConnection({ ...DB_CONFIG, multipleStatements: true });
   try {
     await conn.query(sql);
+    await migrateExistingTables(conn);
   } finally {
     await conn.end();
   }
+}
+
+async function columnExists(conn, table, column) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [DB_CONFIG.database, table, column],
+  );
+  return rows[0].n > 0;
+}
+
+async function indexExists(conn, table, index) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [DB_CONFIG.database, table, index],
+  );
+  return rows[0].n > 0;
+}
+
+async function migrateExistingTables(conn) {
+  // parking_sessions: payment_channel 列
+  if (!(await columnExists(conn, 'parking_sessions', 'payment_channel'))) {
+    await conn.query(
+      `ALTER TABLE parking_sessions
+       ADD COLUMN payment_channel VARCHAR(32) NOT NULL DEFAULT 'NONE' AFTER paid`,
+    );
+  }
+  // parking_sessions: 索引
+  if (!(await indexExists(conn, 'parking_sessions', 'idx_session_lot_enter'))) {
+    await conn.query(
+      `CREATE INDEX idx_session_lot_enter ON parking_sessions (lot_id, enter_time)`,
+    );
+  }
+  if (!(await indexExists(conn, 'parking_sessions', 'idx_session_lot_exit'))) {
+    await conn.query(
+      `CREATE INDEX idx_session_lot_exit ON parking_sessions (lot_id, exit_time)`,
+    );
+  }
+  if (!(await indexExists(conn, 'parking_sessions', 'idx_session_exit_paid'))) {
+    await conn.query(
+      `CREATE INDEX idx_session_exit_paid ON parking_sessions (exit_time, paid)`,
+    );
+  }
+  // report_tasks 表（schema.sql 里是 IF NOT EXISTS，首次跑会建）
 }
 
 /** 清空所有业务数据（测试用）。 */
@@ -50,7 +97,7 @@ async function resetAll() {
   const conn = await getPool().getConnection();
   try {
     await conn.query('SET FOREIGN_KEY_CHECKS = 0');
-    for (const t of ['parking_sessions', 'parking_spaces', 'vehicles', 'parking_lots', 'users']) {
+    for (const t of ['report_tasks', 'parking_sessions', 'parking_spaces', 'vehicles', 'parking_lots', 'users']) {
       await conn.query(`TRUNCATE TABLE ${t}`);
     }
     await conn.query('SET FOREIGN_KEY_CHECKS = 1');
